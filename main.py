@@ -35,7 +35,7 @@ class MedicineFeatureExtractor(nn.Module):
 
 # Load pretrained architecture
 model = MedicineFeatureExtractor(embedding_size=128)
-model.load_state_dict(torch.load("medicine_model.pt", map_location=device))
+model.load_state_dict(torch.load("medicine_model_small.pt", map_location=device))
 model.to(device).eval()
 
 EMBEDDINGS_FILE = "medicine_embeddings.pt"
