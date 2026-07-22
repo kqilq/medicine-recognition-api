@@ -68,7 +68,29 @@ def save_index():
     }, EMBEDDINGS_FILE)
 
 # -------------------------------------------------------------------
-# 1. Prediction Endpoint
+# 1. Get List of All Existing Medicines (For Base44 Display)
+# -------------------------------------------------------------------
+@app.get("/medicines")
+async def get_medicines():
+    global class_names, db_labels
+    
+    medicine_list = []
+    for idx, name in enumerate(class_names):
+        photo_count = int((db_labels == idx).sum().item())
+        medicine_list.append({
+            "id": idx,
+            "name": name,
+            "photo_count": photo_count
+        })
+        
+    return {
+        "status": "success",
+        "medicines": medicine_list,
+        "total": len(medicine_list)
+    }
+
+# -------------------------------------------------------------------
+# 2. Prediction Endpoint
 # -------------------------------------------------------------------
 @app.post("/predict")
 async def predict_medicine(file: UploadFile = File(...)):
@@ -96,7 +118,7 @@ async def predict_medicine(file: UploadFile = File(...)):
     }
 
 # -------------------------------------------------------------------
-# 2. Add or Update Medicine Endpoint
+# 3. Add or Update Medicine Endpoint
 # -------------------------------------------------------------------
 @app.post("/add-medicine")
 async def add_medicine(medicine_name: str = Form(...), files: list[UploadFile] = File(...)):
@@ -132,7 +154,7 @@ async def add_medicine(medicine_name: str = Form(...), files: list[UploadFile] =
     }
 
 # -------------------------------------------------------------------
-# 3. Delete Medicine Endpoint
+# 4. Delete Medicine Endpoint
 # -------------------------------------------------------------------
 @app.delete("/remove-medicine")
 async def remove_medicine(medicine_name: str = Form(...)):
