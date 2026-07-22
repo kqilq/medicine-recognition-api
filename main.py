@@ -21,17 +21,14 @@ app.add_middleware(
 device = torch.device("cpu")
 
 class MedicineFeatureExtractor(nn.Module):
-    def __init__(self, embedding_size=128):
+    def __init__(self):
         super(MedicineFeatureExtractor, self).__init__()
-        # Load standard ResNet50 pretrained backbone directly
-        resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-        self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
     def forward(self, x):
         x = self.backbone(x)
         x = torch.flatten(x, 1)
-        x = self.fc(x)
         return nn.functional.normalize(x, p=2, dim=1)
 
 # Initialize model architecture with ResNet50
