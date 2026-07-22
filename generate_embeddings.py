@@ -7,24 +7,26 @@ from PIL import Image
 
 device = torch.device("cpu")
 
+# --- FIXED EXTRACTOR: Uses raw ImageNet features directly ---
 class MedicineFeatureExtractor(nn.Module):
-    def __init__(self, embedding_size=128):
+    def __init__(self):
         super(MedicineFeatureExtractor, self).__init__()
-        # --- SWITCH BACK TO RESNET18 HERE ---
+        # Load standard ResNet18
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        # Keep everything up to the final pooling layer (removes the final classification layer)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-        self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
     def forward(self, x):
-        x = self.backbone(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-        return nn.functional.normalize(x, p=2, dim=1)
+        x = self.backbone(x)         # Output shape: [batch, 512, 1, 1]
+        x = torch.flatten(x, 1)       # Output shape: [batch, 512]
+        return nn.functional.normalize(x, p=2, dim=1) # L2 normalize feature vector
 
-model = MedicineFeatureExtractor(embedding_size=128).to(device).eval()
+model = MedicineFeatureExtractor().to(device).eval()
 
+# Standard PyTorch Preprocessing matching ImageNet expectations
 preprocess = T.Compose([
-    T.Resize((224, 224)),
+    T.Resize(256),
+    T.CenterCrop(224),
     T.ToTensor(),
     T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
