@@ -10,7 +10,8 @@ device = torch.device("cpu")
 class MedicineFeatureExtractor(nn.Module):
     def __init__(self, embedding_size=128):
         super(MedicineFeatureExtractor, self).__init__()
-        resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        # --- SWITCH BACK TO RESNET18 HERE ---
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
@@ -73,7 +74,7 @@ def build_dataset():
             "class_names": class_names
         }, OUTPUT_FILE)
         
-        print(f"\nSuccess! Successfully saved embeddings for {len(class_names)} medicines to '{OUTPUT_FILE}'.")
+        print(f"\nSuccess! Saved embeddings for {len(class_names)} medicines to '{OUTPUT_FILE}'.")
 
 if __name__ == "__main__":
     build_dataset()
