@@ -23,7 +23,8 @@ device = torch.device("cpu")
 class MedicineFeatureExtractor(nn.Module):
     def __init__(self, embedding_size=128):
         super(MedicineFeatureExtractor, self).__init__()
-        resnet = models.resnet18(weights=None)
+        # Download standard ResNet18 backbone directly
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
@@ -33,9 +34,14 @@ class MedicineFeatureExtractor(nn.Module):
         x = self.fc(x)
         return nn.functional.normalize(x, p=2, dim=1)
 
-# Load pretrained architecture
+# Initialize model architecture
 model = MedicineFeatureExtractor(embedding_size=128)
-model.load_state_dict(torch.load("medicine_model_small.pt", map_location=device))
+
+# Load custom linear layer weights safely with strict=False
+if os.path.exists("medicine_model_small.pt"):
+    small_weights = torch.load("medicine_model_small.pt", map_location=device)
+    model.load_state_dict(small_weights, strict=False)
+
 model.to(device).eval()
 
 EMBEDDINGS_FILE = "medicine_embeddings.pt"
@@ -61,7 +67,9 @@ def save_index():
         "class_names": class_names
     }, EMBEDDINGS_FILE)
 
+# -------------------------------------------------------------------
 # 1. Prediction Endpoint
+# -------------------------------------------------------------------
 @app.post("/predict")
 async def predict_medicine(file: UploadFile = File(...)):
     global db_embeddings, db_labels, class_names
@@ -87,7 +95,9 @@ async def predict_medicine(file: UploadFile = File(...)):
         "confidence_score": confidence
     }
 
+# -------------------------------------------------------------------
 # 2. Add or Update Medicine Endpoint
+# -------------------------------------------------------------------
 @app.post("/add-medicine")
 async def add_medicine(medicine_name: str = Form(...), files: list[UploadFile] = File(...)):
     global db_embeddings, db_labels, class_names
@@ -121,7 +131,9 @@ async def add_medicine(medicine_name: str = Form(...), files: list[UploadFile] =
         "total_classes": len(class_names)
     }
 
+# -------------------------------------------------------------------
 # 3. Delete Medicine Endpoint
+# -------------------------------------------------------------------
 @app.delete("/remove-medicine")
 async def remove_medicine(medicine_name: str = Form(...)):
     global db_embeddings, db_labels, class_names
