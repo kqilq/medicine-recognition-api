@@ -23,9 +23,13 @@ device = torch.device("cpu")
 class MedicineFeatureExtractor(nn.Module):
     def __init__(self, embedding_size=128):
         super(MedicineFeatureExtractor, self).__init__()
-        # Download standard ResNet18 backbone directly
-        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        # 1. Load standard ResNet50 pretrained backbone
+        resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        
+        # 2. Keep feature extractor (all layers except final classification layer)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
+        
+        # 3. Project ResNet50's 2048 features down to your 128 embedding size
         self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
     def forward(self, x):
