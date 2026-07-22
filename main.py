@@ -23,13 +23,9 @@ device = torch.device("cpu")
 class MedicineFeatureExtractor(nn.Module):
     def __init__(self, embedding_size=128):
         super(MedicineFeatureExtractor, self).__init__()
-        # 1. Load standard ResNet50 pretrained backbone
+        # Load standard ResNet50 pretrained backbone directly
         resnet = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-        
-        # 2. Keep feature extractor (all layers except final classification layer)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-        
-        # 3. Project ResNet50's 2048 features down to your 128 embedding size
         self.fc = nn.Linear(resnet.fc.in_features, embedding_size)
 
     def forward(self, x):
@@ -38,14 +34,8 @@ class MedicineFeatureExtractor(nn.Module):
         x = self.fc(x)
         return nn.functional.normalize(x, p=2, dim=1)
 
-# Initialize model architecture
+# Initialize model architecture with ResNet50
 model = MedicineFeatureExtractor(embedding_size=128)
-
-# Load custom linear layer weights safely with strict=False
-if os.path.exists("medicine_model_small.pt"):
-    small_weights = torch.load("medicine_model_small.pt", map_location=device)
-    model.load_state_dict(small_weights, strict=False)
-
 model.to(device).eval()
 
 EMBEDDINGS_FILE = "medicine_embeddings.pt"
