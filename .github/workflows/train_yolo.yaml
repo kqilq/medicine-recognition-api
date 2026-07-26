@@ -31,4 +31,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Auto-update trained YOLO model and dataset config"
-          file_pattern: "best.pt data.yaml dataset/"
+          file_pattern: "*.pt data.yaml dataset/**"
