@@ -1,0 +1,22 @@
+# === Python / Environment ===
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# === YOLO Training Artifacts (Crucial!) ===
+runs/
+*.log
+wandb/
+
+# === OS & IDE Files ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# DO NOT IGNORE best.pt or data.yaml!
+# (The rules above explicitly allow best.pt to be pushed)
