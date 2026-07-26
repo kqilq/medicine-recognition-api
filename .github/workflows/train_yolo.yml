@@ -1,0 +1,35 @@
+name: Train YOLO Object Detection Model
+
+on:
+  push:
+    paths:
+      - 'dataset/**'
+      - 'data.yaml'
+  workflow_dispatch:
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision ultralytics pyyaml pillow
+
+      - name: Run Model Training
+        run: python train.py
+
+      - name: Commit and Push Updated Model
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update trained YOLO model (best.pt)"
+          file_pattern: "best.pt"
