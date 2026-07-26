@@ -2,7 +2,6 @@ import os
 import shutil
 import random
 import glob
-from PIL import Image
 from ultralytics import YOLO
 
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
@@ -12,7 +11,6 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     3. Auto-creates bounding box labels for photos
     4. Splits data into train/val under dataset/images and dataset/labels
     """
-    # Exclude reserved dataset directories
     reserved_dirs = ["images", "labels", "train", "val", "runs"]
     classes = [
         d for d in os.listdir(source_dir) 
@@ -22,12 +20,12 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     classes.sort()  # Maintain consistent class ID indexing across runs
     
     if not classes:
-        print("No raw medicine folders found in dataset/. Checking if dataset is already structured...")
+        print("No raw medicine folders found in dataset/. Checking existing dataset...")
         return
 
     print(f"Found {len(classes)} medicine categories: {classes}")
 
-    # Generate data.yaml
+    # Generate data.yaml dynamically
     yaml_content = f"path: ./dataset\ntrain: images/train\nval: images/val\n\nnames:\n"
     for idx, cls_name in enumerate(classes):
         yaml_content += f"  {idx}: {cls_name}\n"
@@ -65,18 +63,18 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 src_img_path = os.path.join(class_folder, img_name)
                 base_name = os.path.splitext(img_name)[0]
                 
-                # Copy image file with prefix to avoid name collisions across categories
+                # Copy image file with class prefix to prevent name overlap
                 dest_img_path = os.path.join(dest_img_dir, f"{cls_name}_{img_name}")
                 shutil.copy(src_img_path, dest_img_path)
 
                 src_txt_path = os.path.join(class_folder, f"{base_name}.txt")
                 dest_txt_path = os.path.join(dest_lbl_dir, f"{cls_name}_{base_name}.txt")
 
-                # If manual bounding box exists, copy it. Otherwise auto-annotate centered box.
+                # If manual label exists, copy it; otherwise auto-annotate center box
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
-                    # Normalized bounding box: <class_id> <x_center> <y_center> <width> <height>
+                    # Bounding box format: <class_id> <x_center> <y_center> <width> <height>
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.write(f"{class_id} 0.5 0.5 0.8 0.8\n")
 
@@ -87,8 +85,8 @@ def main():
     print("--- STEP 1: Preparing Dataset & Auto-Generating Labels ---")
     auto_annotate_and_split("dataset")
 
-    print("\n--- STEP 2: Training YOLO Detection Model ---")
-    model = YOLO("yolov8n.pt")  # Standard multi-object detection weights
+    print("\n--- STEP 2: Training YOLO Multi-Object Detection Model ---")
+    model = YOLO("yolov8n.pt")  # Standard detection weights
 
     model.train(
         data="data.yaml",
@@ -101,7 +99,6 @@ def main():
     )
 
     print("\n--- STEP 3: Locating and Copying best.pt to Root ---")
-    # Search for best.pt recursively inside runs/
     weights_found = glob.glob("runs/**/weights/best.pt", recursive=True)
     
     if weights_found:
