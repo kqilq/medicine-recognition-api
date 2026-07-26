@@ -2,16 +2,28 @@ from fastapi import FastAPI, File, UploadFile
 from ultralytics import YOLO
 from PIL import Image
 import io
+import os
 
 app = FastAPI()
-model = YOLO("best.pt")
+
+# Load best.pt on startup
+MODEL_PATH = "best.pt"
+if os.path.exists(MODEL_PATH):
+    model = YOLO(MODEL_PATH)
+else:
+    print("Warning: best.pt not found! Fallback to standard yolov8n.pt")
+    model = YOLO("yolov8n.pt")
+
+@app.get("/")
+def read_root():
+    return {"status": "API is running"}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     image_bytes = await file.read()
     image = Image.open(io.BytesIO(image_bytes))
 
-    # Run detection
+    # Run object detection
     results = model(image, conf=0.35)
     
     detected_items = []
