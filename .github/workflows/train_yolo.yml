@@ -7,6 +7,9 @@ on:
       - 'data.yaml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   train:
     runs-on: ubuntu-latest
@@ -25,11 +28,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch torchvision ultralytics pyyaml pillow
 
-      - name: Run Model Training
+      - name: Run Model Training & Auto-Split
         run: python train.py
 
-      - name: Commit and Push Updated Model
+      - name: Commit and Push Updated Model & Split Dataset
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Auto-update trained YOLO model (best.pt)"
-          file_pattern: "best.pt"
+          commit_message: "Auto-split dataset & update trained YOLO model (best.pt)"
+          file_pattern: "best.pt dataset/images/ dataset/labels/"
