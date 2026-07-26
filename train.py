@@ -46,7 +46,7 @@ def organize_and_split():
 def main():
     organize_and_split()
     
-    model = YOLO("yolov8n.pt")
+    model = YOLO("yolov8n-cls.pt")  # Image Classification model (requires NO .txt files)
     model.train(
         data="data.yaml",
         epochs=30,
