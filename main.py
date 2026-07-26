@@ -1,61 +1,35 @@
-import io
-import torch
-from PIL import Image
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile
 from ultralytics import YOLO
+from PIL import Image
+import io
 
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Load trained YOLO model
-MODEL_FILE = "best.pt"
-model = YOLO(MODEL_FILE) if torch.cuda.is_available() or True else None
-
-@app.get("/")
-def root():
-    return {"status": "ok", "message": "Multi-Medicine Recognition API"}
-
-@app.get("/medicines")
-def get_medicines():
-    if not model or not hasattr(model, 'names'):
-        return {"medicines": []}
-    
-    names = list(model.names.values())
-    return {"medicines": [{"name": name} for name in names]}
+model = YOLO("best.pt")
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
+    image_bytes = await file.read()
+    image = Image.open(io.BytesIO(image_bytes))
 
-    # Run YOLO object detection
-    results = model(image, conf=0.25)
+    # Run detection
+    results = model(image, conf=0.35)
     
     detected_items = []
     
     for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            cls_id = int(box.cls[0].item())
-            confidence = float(box.conf[0].item())
-            medicine_name = model.names[cls_id]
-            xyxy = box.xyxy[0].tolist() # [xmin, ymin, xmax, ymax]
-
+        for box in result.boxes:
+            class_id = int(box.cls[0])
+            medicine_name = model.names[class_id]
+            confidence = float(box.conf[0])
+            
             detected_items.append({
-                "medicine_name": medicine_name,
-                "confidence_score": round(confidence * 100, 1),
-                "bounding_box": xyxy
+                "medicine": medicine_name,
+                "confidence": round(confidence * 100, 1),
+                "box": [round(coord, 2) for coord in box.xyxy[0].tolist()]
             })
 
     return {
+        "success": True,
         "total_detected": len(detected_items),
-        "detected_medicines": detected_items
+        "detected_items": detected_items
     }
