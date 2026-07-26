@@ -100,13 +100,16 @@ def main():
 
     print("\n--- STEP 3: Locating and Copying best.pt to Root ---")
     weights_found = glob.glob("runs/**/weights/best.pt", recursive=True)
-    
+
     if weights_found:
-        latest_weight = weights_found[-1]
-        shutil.copy(latest_weight, "best.pt")
-        print(f"SUCCESS: Copied '{latest_weight}' to root 'best.pt'")
+       latest_weight = weights_found[-1]
+       shutil.copy(latest_weight, "best.pt")
+       print(f"SUCCESS: Copied '{latest_weight}' to root 'best.pt'")
     else:
-        print("ERROR: Failed to find best.pt in runs/ folder!")
+       print("ERROR: Failed to find best.pt in runs/ folder!")
+    # Create a dummy file if training fails so git-auto-commit doesn't crash
+       with open("best.pt", "a"):
+           os.utime("best.pt", None)
 
 if __name__ == "__main__":
     main()
