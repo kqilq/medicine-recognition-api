@@ -1,8 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 fastapi
 uvicorn
-python-multipart
-pillow
 torch
 torchvision
 ultralytics
+pillow
+python-multipart
 pyyaml
