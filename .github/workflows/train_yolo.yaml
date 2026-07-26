@@ -1,34 +1,43 @@
 name: Train YOLO Object Detection Model
 
 on:
-  workflow_dispatch:
   push:
     paths:
       - 'dataset/**'
+  workflow_dispatch:
 
 jobs:
   train:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ultralytics torch torchvision pillow pyyaml
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ultralytics torch torchvision
 
-      - name: Run Training Script
-        run: |
-          python train.py
+    - name: Run Training Script
+      run: python train.py
 
-      - name: Commit and Push Updated Model & Config
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Auto-update trained YOLO model and dataset config"
-          file_pattern: "*.pt data.yaml dataset/**"
+    # CRITICAL: Pulls any changes made on GitHub during the 8-minute training run
+    - name: Sync with Remote Branch
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git pull --rebase origin main
+
+    - name: Commit and Push Trained Model
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "Auto-update trained YOLO model and dataset config"
+        file_pattern: "*.pt data.yaml dataset/**"
