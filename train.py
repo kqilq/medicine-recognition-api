@@ -3,63 +3,70 @@ import shutil
 import random
 from ultralytics import YOLO
 
-def organize_and_split():
-    dataset_dir = "dataset"
-    img_train = os.path.join(dataset_dir, "images", "train")
-    img_val = os.path.join(dataset_dir, "images", "val")
-    lbl_train = os.path.join(dataset_dir, "labels", "train")
-    lbl_val = os.path.join(dataset_dir, "labels", "val")
+def auto_split_dataset(source_dir="dataset", split_ratio=0.8):
+    """
+    Scans dataset/ subdirectories (e.g. dataset/南杏) and automatically
+    splits photos into dataset_split/train and dataset_split/val.
+    """
+    split_dir = "dataset_split"
+    
+    # Clean previous split if it exists
+    if os.path.exists(split_dir):
+        shutil.rmtree(split_dir)
 
-    # Create destination directories
-    for d in [img_train, img_val, lbl_train, lbl_val]:
-        os.makedirs(d, exist_ok=True)
-
-    # Walk through root folder or subfolder images
-    image_extensions = ('.jpg', '.jpeg', '.png')
-    all_images = []
-    for root, _, files in os.walk(dataset_dir):
-        if "images" in root or "labels" in root:
+    classes = [d for d in os.listdir(source_dir) if os.path.isdir(os.path.join(source_dir, d))]
+    
+    for cls in classes:
+        cls_path = os.path.join(source_dir, cls)
+        # Skip internal train/val folders if present
+        if cls in ["train", "val", "images", "labels"]:
             continue
-        for file in files:
-            if file.lower().endswith(image_extensions):
-                all_images.append(os.path.join(root, file))
 
-    random.shuffle(all_images)
-    split_idx = int(len(all_images) * 0.8)
+        images = [f for f in os.listdir(cls_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        random.shuffle(images)
 
-    train_files = all_images[:split_idx]
-    val_files = all_images[split_idx:]
+        split_idx = int(len(images) * split_ratio)
+        train_imgs = images[:split_idx]
+        val_imgs = images[split_idx:]
 
-    def move_pairs(file_list, dest_img, dest_lbl):
-        for img_path in file_list:
-            base_name = os.path.splitext(os.path.basename(img_path))[0]
-            ext = os.path.splitext(img_path)[1]
-            txt_path = os.path.splitext(img_path)[0] + ".txt"
+        # Create target directories
+        train_cls_dir = os.path.join(split_dir, "train", cls)
+        val_cls_dir = os.path.join(split_dir, "val", cls)
+        os.makedirs(train_cls_dir, exist_ok=True)
+        os.makedirs(val_cls_dir, exist_ok=True)
 
-            shutil.copy(img_path, os.path.join(dest_img, base_name + ext))
-            if os.path.exists(txt_path):
-                shutil.copy(txt_path, os.path.join(dest_lbl, base_name + ".txt"))
+        # Copy files
+        for img in train_imgs:
+            shutil.copy(os.path.join(cls_path, img), os.path.join(train_cls_dir, img))
+        for img in val_imgs:
+            shutil.copy(os.path.join(cls_path, img), os.path.join(val_cls_dir, img))
 
-    move_pairs(train_files, img_train, lbl_train)
-    move_pairs(val_files, img_val, lbl_val)
+    print(f"Dataset split completed successfully into '{split_dir}'")
+    return split_dir
 
 def main():
-    organize_and_split()
-    
-    model = YOLO("yolov8n-cls.pt")  # Image Classification model (requires NO .txt files)
+    # 1. Automatically generate train/val directory structure
+    split_dataset_path = auto_split_dataset("dataset", split_ratio=0.8)
+
+    # 2. Load classification model
+    model = YOLO("yolov8n-cls.pt")
+
+    # 3. Train on the automatically prepared dataset path
     model.train(
-        data="data.yaml",
+        data=split_dataset_path,
         epochs=30,
         imgsz=640,
         batch=8,
         project="runs",
-        name="detect_run",
+        name="classify_run",
         exist_ok=True
     )
-    
-    trained_weights = os.path.join("runs", "detect_run", "weights", "best.pt")
+
+    # 4. Save trained weights to best.pt
+    trained_weights = os.path.join("runs", "classify_run", "weights", "best.pt")
     if os.path.exists(trained_weights):
         shutil.copy(trained_weights, "best.pt")
+        print("Success! Trained model saved to 'best.pt'")
 
 if __name__ == "__main__":
     main()
