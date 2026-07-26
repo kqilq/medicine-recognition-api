@@ -1,0 +1,16 @@
+# 1. Root path to your dataset folder (relative to repository root)
+path: ./dataset
+
+# 2. Relative paths to train/val image directories inside path
+train: images/train
+val: images/val
+
+# 3. Class ID to Name mapping (0-indexed)
+names:
+  0: 南杏
+  1: 石決明
+  2: 穿破石
+  3: 苦瓜
+  4: 蘆根
+  5: 防風
+  6: 麩炒枳殼
