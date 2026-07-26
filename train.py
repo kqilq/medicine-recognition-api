@@ -1,49 +1,65 @@
 import os
-import yaml
+import shutil
+import random
 from ultralytics import YOLO
 
-DATASET_DIR = "dataset"
-OUTPUT_MODEL = "best.pt"
+def organize_and_split():
+    dataset_dir = "dataset"
+    img_train = os.path.join(dataset_dir, "images", "train")
+    img_val = os.path.join(dataset_dir, "images", "val")
+    lbl_train = os.path.join(dataset_dir, "labels", "train")
+    lbl_val = os.path.join(dataset_dir, "labels", "val")
 
-def prepare_and_train():
-    if not os.path.exists(DATASET_DIR):
-        print(f"Directory '{DATASET_DIR}' not found.")
-        return
+    # Create destination directories
+    for d in [img_train, img_val, lbl_train, lbl_val]:
+        os.makedirs(d, exist_ok=True)
 
-    class_names = sorted([d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))])
-    print(f"Found {len(class_names)} classes: {class_names}")
+    # Walk through root folder or subfolder images
+    image_extensions = ('.jpg', '.jpeg', '.png')
+    all_images = []
+    for root, _, files in os.walk(dataset_dir):
+        if "images" in root or "labels" in root:
+            continue
+        for file in files:
+            if file.lower().endswith(image_extensions):
+                all_images.append(os.path.join(root, file))
 
-    # Build dataset configuration YAML for YOLO
-    yaml_data = {
-        'path': os.path.abspath(DATASET_DIR),
-        'train': '.',
-        'val': '.',
-        'names': {i: name for i, name in enumerate(class_names)}
-    }
+    random.shuffle(all_images)
+    split_idx = int(len(all_images) * 0.8)
 
-    with open('dataset.yaml', 'w') as f:
-        yaml.dump(yaml_data, f)
+    train_files = all_images[:split_idx]
+    val_files = all_images[split_idx:]
 
-    # Load pre-trained nano YOLO model for quick transfer learning
-    model = YOLO('yolov8n.pt')
+    def move_pairs(file_list, dest_img, dest_lbl):
+        for img_path in file_list:
+            base_name = os.path.splitext(os.path.basename(img_path))[0]
+            ext = os.path.splitext(img_path)[1]
+            txt_path = os.path.splitext(img_path)[0] + ".txt"
 
-    # Train on dataset
+            shutil.copy(img_path, os.path.join(dest_img, base_name + ext))
+            if os.path.exists(txt_path):
+                shutil.copy(txt_path, os.path.join(dest_lbl, base_name + ".txt"))
+
+    move_pairs(train_files, img_train, lbl_train)
+    move_pairs(val_files, img_val, lbl_val)
+
+def main():
+    organize_and_split()
+    
+    model = YOLO("yolov8n.pt")
     model.train(
-        data='dataset.yaml',
+        data="data.yaml",
         epochs=30,
         imgsz=640,
         batch=8,
-        project='runs',
-        name='train_result',
+        project="runs",
+        name="detect_run",
         exist_ok=True
     )
-
-    # Save final model weights
-    model.export(format='engine') if False else None
-    best_weights = os.path.join('runs', 'train_result', 'weights', 'best.pt')
-    if os.path.exists(best_weights):
-        os.system(f"cp {best_weights} {OUTPUT_MODEL}")
-        print(f"Successfully trained and saved model to '{OUTPUT_MODEL}'")
+    
+    trained_weights = os.path.join("runs", "detect_run", "weights", "best.pt")
+    if os.path.exists(trained_weights):
+        shutil.copy(trained_weights, "best.pt")
 
 if __name__ == "__main__":
-    prepare_and_train()
+    main()
