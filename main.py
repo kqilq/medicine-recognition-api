@@ -1,17 +1,21 @@
 import os
-import tempfile
-from typing import Optional
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+import io
+import gc
+import requests
+import numpy as np
+import torch
+from PIL import Image
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from ultralytics import YOLO
 
-app = FastAPI(
-    title="Medicine Recognition API",
-    description="YOLOv8 powered API for identifying Chinese medicines",
-    version="1.1.0"
-)
+# Save memory on Render free/starter tiers
+torch.set_num_threads(1)
 
-# Enable CORS so Base44 / frontend can connect seamlessly
+app = FastAPI(title="YOLOv8 Medicine Object Detection API")
+
+# Enable CORS for Base44 frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,89 +24,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model variable
-model = None
+# Load YOLOv8 Medium model (best.pt in root folder)
+MODEL_PATH = "best.pt"
+if not os.path.exists(MODEL_PATH):
+    # Fallback to base weights if best.pt hasn't been trained/committed yet
+    MODEL_PATH = "yolov8m.pt"
 
-@app.on_event("startup")
-def load_model():
-    global model
-    model_path = "best.pt"
-    
-    # Fallback to base model if best.pt is missing
-    if not os.path.exists(model_path):
-        print("Warning: best.pt not found. Falling back to yolov8n.pt")
-        model_path = "yolov8n.pt"
-        
-    print(f"Loading YOLO model from: {model_path}")
-    model = YOLO(model_path)
+print(f"Loading YOLO model from: {MODEL_PATH}")
+model = YOLO(MODEL_PATH)
+
+
+class PredictRequest(BaseModel):
+    file_url: str
 
 
 @app.get("/")
 def read_root():
-    return {
-        "status": "online",
-        "message": "Medicine Recognition API is running!"
-    }
+    return {"status": "ok", "message": "Medicine Detection API is active."}
 
 
 @app.post("/predict")
-async def predict(
-    file: UploadFile = File(...),
-    expected_count: Optional[str] = Form(None)  # Options: "1", "2", "3", "4", "5", "5+"
-):
-    global model
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model is not loaded.")
+async def predict_medicine(payload: PredictRequest):
+    file_url = payload.file_url
 
-    # Validate file format
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
+    if not file_url or not isinstance(file_url, str):
+        raise HTTPException(status_code=400, detail="file_url is required and must be a valid string.")
 
     try:
-        # Save incoming image to a temporary file for YOLO processing
-        suffix = os.path.splitext(file.filename)[1] or ".jpg"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            contents = await file.read()
-            tmp.write(contents)
-            temp_path = tmp.name
+        # 1. Download the image from Base44 URL
+        response = requests.get(file_url, timeout=15)
+        response.raise_for_status()
 
-        detected_items = []
+        image = Image.open(io.BytesIO(response.content)).convert("RGB")
+        img_w, img_h = image.size
 
-        # Run inference with a low confidence threshold (10%) to catch all potential items
-        results = model(temp_path, conf=0.10)
+        # 2. Run Inference with low NMS overlap threshold to prevent duplicate boxes
+        results = model.predict(
+            source=image,
+            conf=0.25,  # Min confidence threshold (25%)
+            iou=0.45,   # NMS threshold: drops overlapping duplicate boxes
+            imgsz=416,
+            verbose=False
+        )
 
-        for r in results:
-            for box in r.boxes:
-                class_id = int(box.cls[0])
-                conf = float(box.conf[0]) * 100
-                medicine_name = model.names[class_id]
-                bbox = [round(float(coord), 1) for coord in box.xyxy[0].tolist()]
+        detections = []
+        result = results[0]
 
-                detected_items.append({
-                    "medicine": medicine_name,
-                    "confidence": round(conf, 1),
-                    "box": bbox
+        # 3. Extract bounding boxes and category labels
+        if result.boxes is not None and len(result.boxes) > 0:
+            for box in result.boxes:
+                # Convert xyxy tensor coordinates to floats
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                confidence = float(box.conf[0].item())
+                class_id = int(box.cls[0].item())
+                class_name = model.names[class_id]
+
+                detections.append({
+                    "medicine": class_name,
+                    "confidence": round(confidence * 100, 1),
+                    # Absolute pixel coordinates: [ymin, xmin, ymax, xmax]
+                    "box": [round(y1, 1), round(x1, 1), round(y2, 1), round(x2, 1)],
+                    # Normalized coordinates (0.0 - 1.0) for frontend flexibility
+                    "box_normalized": [
+                        round(y1 / img_h, 4),
+                        round(x1 / img_w, 4),
+                        round(y2 / img_h, 4),
+                        round(x2 / img_w, 4)
+                    ]
                 })
-
-        # Sort all detected candidates by confidence score (highest first)
-        detected_items.sort(key=lambda x: x["confidence"], reverse=True)
-
-        # Apply expected count cap if user selected a specific numeric count ("1" to "5")
-        if expected_count and expected_count.isdigit():
-            limit = int(expected_count)
-            detected_items = detected_items[:limit]
 
         return {
             "success": True,
-            "total_detected": len(detected_items),
-            "expected_count_applied": expected_count,
-            "detected_items": detected_items
+            "count": len(detections),
+            "detections": detections
         }
 
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image from file_url: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
     finally:
-        # Clean up temporary image file from disk
-        if 'temp_path' in locals() and os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Force garbage collection to prevent Render RAM spikes
+        gc.collect()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
