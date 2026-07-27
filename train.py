@@ -74,7 +74,7 @@ def main():
     auto_annotate_and_split("dataset")
 
     print("\n--- STEP 2: Training YOLO Detection Model ---")
-    model = YOLO("yolov8n.pt")
+    model = YOLO("yolov8m.pt")
 
     results = model.train(
         data="data.yaml",
