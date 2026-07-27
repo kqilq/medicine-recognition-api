@@ -83,7 +83,7 @@ def main():
         batch=8,
         degrees=15.0,
         flipud=0.5,
-        fliplr=0.5
+        fliplr=0.5,
         scale=0.2,
         project="runs",
         name="detect_run",
