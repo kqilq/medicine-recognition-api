@@ -1,46 +1,46 @@
-name: Train YOLO Object Detection Model
+name: Train YOLO Model
 
 on:
   push:
-    paths:
-      - 'dataset/**'
+    branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write # Grants write permissions so git-auto-commit can push best.pt
 
 jobs:
   train:
     runs-on: ubuntu-latest
-    
-    permissions:
-      contents: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }} # Correct variable for push events
+          fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install ultralytics torch torchvision
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ultralytics torch torchvision opencv-python
 
-    - name: Run Training Script
-      run: python train.py
+      - name: Run Training Script
+        run: python train.py
 
-    # CRITICAL FIX: Stashes modified best.pt, pulls remote changes, then pops best.pt back
-    - name: Pull and Rebase Remote Changes safely
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git pull --rebase --autostash origin main
+      - name: Clean up temporary cache files before commit
+        run: |
+          # Remove cache files so they never trigger git conflicts
+          rm -f dataset/*.cache dataset/**/*.cache
+          git reset HEAD .
 
-    - name: Commit and Push Trained Model
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: "Auto-update trained YOLO model and dataset config"
-        file_pattern: "*.pt data.yaml dataset/**"
+      - name: Commit and Push updated best.pt
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update trained model weights [skip ci]"
+          file_pattern: "best.pt data.yaml" # ONLY commit best.pt and data.yaml
+          push_options: "--force"
