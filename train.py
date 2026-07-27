@@ -5,7 +5,6 @@ import glob
 from ultralytics import YOLO
 
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
-    # Exclude system and generated directories
     reserved_dirs = ["images", "labels", "train", "val", "runs", ".git", ".github"]
     classes = [
         d for d in os.listdir(source_dir) 
@@ -35,6 +34,19 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     lbl_train_dir = os.path.join(source_dir, "labels", "train")
     lbl_val_dir = os.path.join(source_dir, "labels", "val")
 
+    # FIX 1: Clean generated directories before splitting to prevent stale files
+    for generated_dir in [os.path.join(source_dir, "images"), os.path.join(source_dir, "labels")]:
+        if os.path.exists(generated_dir):
+            shutil.rmtree(generated_dir)
+
+    # FIX 2: Clear any YOLO cached labels to ensure new photos are indexed
+    for cache_file in glob.glob(f"{source_dir}/**/*.cache", recursive=True):
+        try:
+            os.remove(cache_file)
+        except OSError:
+            pass
+
+    # Re-create empty target directories
     for d in [img_train_dir, img_val_dir, lbl_train_dir, lbl_val_dir]:
         os.makedirs(d, exist_ok=True)
 
@@ -66,7 +78,6 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
-                    # Auto-generate center box covering 80% of image width/height
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.write(f"{class_id} 0.5 0.5 0.8 0.8\n")
 
@@ -97,7 +108,6 @@ def main():
 
     print("\n--- STEP 3: Locating and Copying best.pt to Root ---")
     
-    # Check directly inside YOLO's output directory
     target_weight = os.path.join(model.trainer.save_dir, "weights", "best.pt")
     
     if os.path.exists(target_weight):
@@ -105,7 +115,6 @@ def main():
         size_mb = os.path.getsize("best.pt") / (1024 * 1024)
         print(f"SUCCESS: Copied '{target_weight}' to root 'best.pt' ({size_mb:.2f} MB)")
     else:
-        # Fallback recursive search
         found_weights = glob.glob("runs/**/weights/best.pt", recursive=True)
         if found_weights:
             shutil.copy(found_weights[-1], "best.pt")
