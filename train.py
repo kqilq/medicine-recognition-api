@@ -2,10 +2,54 @@ import os
 import shutil
 import random
 import glob
+import cv2
+import numpy as np
 from ultralytics import YOLO
 
+def detect_objects_and_get_yolo_boxes(img_path, class_id):
+    """
+    Scans an image using OpenCV, isolates objects against the background,
+    and returns precise individual YOLO bounding boxes for each piece.
+    """
+    img = cv2.imread(img_path)
+    if img is None:
+        return [f"{class_id} 0.5 0.5 0.8 0.8\n"]
+    
+    h, w, _ = img.shape
+    
+    # Convert to grayscale and blur to remove noise
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # Adaptive thresholding to separate herbs from white/light background
+    _, thresh = cv2.threshold(blurred, 230, 255, cv2.THRESH_BINARY_INV)
+    
+    # Find contours (outlines) of distinct shapes
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    boxes = []
+    min_area = (w * h) * 0.01  # Ignore tiny noise artifacts smaller than 1% of image size
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > min_area:
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            
+            # Normalize coordinates for YOLO (0.0 to 1.0)
+            x_center = (x + bw / 2.0) / w
+            y_center = (y + bh / 2.0) / h
+            norm_w = bw / w
+            norm_h = bh / h
+            
+            boxes.append(f"{class_id} {x_center:.6f} {y_center:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+            
+    # Fallback to single center box if thresholding fails to find distinct shapes
+    if not boxes:
+        boxes.append(f"{class_id} 0.5 0.5 0.8 0.8\n")
+        
+    return boxes
+
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
-    # Exclude system and generated directories
     reserved_dirs = ["images", "labels", "train", "val", "runs", ".git", ".github"]
     classes = [
         d for d in os.listdir(source_dir) 
@@ -13,7 +57,6 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
         and d not in reserved_dirs 
         and not d.startswith(".")
     ]
-    
     classes.sort()
     
     if not classes:
@@ -35,19 +78,17 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     lbl_train_dir = os.path.join(source_dir, "labels", "train")
     lbl_val_dir = os.path.join(source_dir, "labels", "val")
 
-    # 1. Clean generated directories before splitting to prevent stale files and data leakage
+    # Clean previous splits & caches
     for generated_dir in [os.path.join(source_dir, "images"), os.path.join(source_dir, "labels")]:
         if os.path.exists(generated_dir):
             shutil.rmtree(generated_dir)
 
-    # 2. Clear any YOLO cached labels to ensure newly added photos are indexed properly
     for cache_file in glob.glob(f"{source_dir}/**/*.cache", recursive=True):
         try:
             os.remove(cache_file)
         except OSError:
             pass
 
-    # Re-create empty target directories
     for d in [img_train_dir, img_val_dir, lbl_train_dir, lbl_val_dir]:
         os.makedirs(d, exist_ok=True)
 
@@ -56,7 +97,6 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
         images = [f for f in os.listdir(class_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
         
         if not images:
-            print(f"Warning: No images found in {class_folder}. Skipping...")
             continue
 
         random.shuffle(images)
@@ -79,54 +119,38 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
-                    # Auto-generate center box covering 80% of image width/height
+                    # Dynamically calculate tight boxes for each individual object in the photo
+                    boxes = detect_objects_and_get_yolo_boxes(src_img_path, class_id)
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
-                        txt_file.write(f"{class_id} 0.5 0.5 0.8 0.8\n")
+                        txt_file.writelines(boxes)
 
         process_image_list(train_imgs, img_train_dir, lbl_train_dir)
         process_image_list(val_imgs, img_val_dir, lbl_val_dir)
 
 def main():
-    print("--- STEP 1: Preparing Dataset & Auto-Generating Labels ---")
+    print("--- STEP 1: Auto-Detecting Objects & Generating Labels ---")
     auto_annotate_and_split("dataset")
 
-    print("\n--- STEP 2: Training YOLO Detection Model ---")
-    # Using YOLOv8 Medium model as requested
+    print("\n--- STEP 2: Training YOLO Model ---")
     model = YOLO("yolov8m.pt")
 
     results = model.train(
         data="data.yaml",
-        epochs=50,
+        epochs=60,
         imgsz=416,
         batch=4,
         workers=2,
         lr0=0.005,
-        degrees=10.0,
-        flipud=0.5,
-        fliplr=0.5,
         project="runs",
         name="detect_run",
         exist_ok=True
     )
 
-    print("\n--- STEP 3: Locating and Copying best.pt to Root ---")
-    
-    # Check directly inside YOLO's output directory
+    print("\n--- STEP 3: Saving Model ---")
     target_weight = os.path.join(model.trainer.save_dir, "weights", "best.pt")
-    
     if os.path.exists(target_weight):
         shutil.copy(target_weight, "best.pt")
-        size_mb = os.path.getsize("best.pt") / (1024 * 1024)
-        print(f"SUCCESS: Copied '{target_weight}' to root 'best.pt' ({size_mb:.2f} MB)")
-    else:
-        # Fallback recursive search
-        found_weights = glob.glob("runs/**/weights/best.pt", recursive=True)
-        if found_weights:
-            shutil.copy(found_weights[-1], "best.pt")
-            size_mb = os.path.getsize("best.pt") / (1024 * 1024)
-            print(f"SUCCESS (Fallback): Copied '{found_weights[-1]}' to root 'best.pt' ({size_mb:.2f} MB)")
-        else:
-            print("ERROR: Failed to find best.pt in runs/ folder!")
+        print("Successfully saved best.pt to root!")
 
 if __name__ == "__main__":
     main()
