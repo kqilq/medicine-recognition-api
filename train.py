@@ -10,10 +10,11 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
     """
     Scans an image using OpenCV, isolates objects against the background,
     and returns precise individual YOLO bounding boxes for each piece.
+    If the image is a blank background, it returns an empty list.
     """
     img = cv2.imread(img_path)
     if img is None:
-        return [f"{class_id} 0.5 0.5 0.8 0.8\n"]
+        return []
     
     h, w, _ = img.shape
     
@@ -43,10 +44,7 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
             
             boxes.append(f"{class_id} {x_center:.6f} {y_center:.6f} {norm_w:.6f} {norm_h:.6f}\n")
             
-    # Fallback to single center box if thresholding fails to find distinct shapes
-    if not boxes:
-        boxes.append(f"{class_id} 0.5 0.5 0.8 0.8\n")
-        
+    # Returns empty list [] for blank background photos so YOLO treats them as negative samples
     return boxes
 
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
@@ -119,7 +117,7 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
-                    # Dynamically calculate tight boxes for each individual object in the photo
+                    # Dynamically calculate tight boxes or write an empty txt for blank photos
                     boxes = detect_objects_and_get_yolo_boxes(src_img_path, class_id)
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.writelines(boxes)
