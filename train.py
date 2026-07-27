@@ -5,10 +5,13 @@ import glob
 from ultralytics import YOLO
 
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
-    reserved_dirs = ["images", "labels", "train", "val", "runs"]
+    # Exclude system and generated directories
+    reserved_dirs = ["images", "labels", "train", "val", "runs", ".git", ".github"]
     classes = [
         d for d in os.listdir(source_dir) 
-        if os.path.isdir(os.path.join(source_dir, d)) and d not in reserved_dirs
+        if os.path.isdir(os.path.join(source_dir, d)) 
+        and d not in reserved_dirs 
+        and not d.startswith(".")
     ]
     
     classes.sort()
@@ -63,6 +66,7 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
+                    # Auto-generate center box covering 80% of image width/height
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.write(f"{class_id} 0.5 0.5 0.8 0.8\n")
 
@@ -79,12 +83,13 @@ def main():
     results = model.train(
         data="data.yaml",
         epochs=50,
-        imgsz=640,
-        batch=8,
-        degrees=15.0,
+        imgsz=416,
+        batch=4,
+        workers=2,
+        lr0=0.005,
+        degrees=10.0,
         flipud=0.5,
         fliplr=0.5,
-        scale=0.2,
         project="runs",
         name="detect_run",
         exist_ok=True
