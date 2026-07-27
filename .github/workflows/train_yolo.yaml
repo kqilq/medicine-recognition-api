@@ -29,15 +29,11 @@ jobs:
     - name: Run Training Script
       run: python train.py
 
-    # CRITICAL: Pulls any changes made on GitHub during the 8-minute training run
-    - name: Sync with Remote Branch
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git pull --rebase origin main
-
+    # The action automatically handles pulling, rebasing, and committing!
     - name: Commit and Push Trained Model
       uses: stefanzweifel/git-auto-commit-action@v5
       with:
         commit_message: "Auto-update trained YOLO model and dataset config"
         file_pattern: "*.pt data.yaml dataset/**"
+        # Option to pull with rebase automatically before committing:
+        push_options: '--force'
