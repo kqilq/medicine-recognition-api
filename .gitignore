@@ -20,3 +20,14 @@ Thumbs.db
 
 # DO NOT IGNORE best.pt or data.yaml!
 # (The rules above explicitly allow best.pt to be pushed)
+
+# Ignore dynamically generated dataset splits and cache
+dataset/images/
+dataset/labels/
+dataset/*.cache
+dataset/**/*.cache
+runs/
+
+# Keep root model weights clean
+*.pt
+!yolov8m.pt
