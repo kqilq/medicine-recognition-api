@@ -78,7 +78,7 @@ def main():
 
     results = model.train(
         data="data.yaml",
-        epochs=30,
+        epochs=100,
         imgsz=640,
         batch=8,
         project="runs",
