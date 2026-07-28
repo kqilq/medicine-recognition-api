@@ -18,18 +18,22 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
     
     h, w, _ = img.shape
     
-    # Convert to grayscale and blur to remove noise
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # 1. Convert to LAB color space to separate lightness from color channels
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l_channel, _, _ = cv2.split(lab)
     
-    # Adaptive thresholding to separate herbs from white/light background
-    _, thresh = cv2.threshold(blurred, 230, 255, cv2.THRESH_BINARY_INV)
+    # 2. Otsu's Thresholding to dynamically compute contrast cutoff
+    blurred = cv2.GaussianBlur(l_channel, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # Find contours (outlines) of distinct shapes
+    # 3. Morphological closing to fill hollow inner herb structures
+    kernel = np.ones((5, 5), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     boxes = []
-    min_area = (w * h) * 0.01  # Ignore tiny noise artifacts smaller than 1% of image size
+    min_area = (w * h) * 0.008  # Drop tiny background artifacts (< 0.8% total area)
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
@@ -44,7 +48,6 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
             
             boxes.append(f"{class_id} {x_center:.6f} {y_center:.6f} {norm_w:.6f} {norm_h:.6f}\n")
             
-    # Returns empty list [] for blank background photos so YOLO treats them as negative samples
     return boxes
 
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
@@ -117,7 +120,6 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
                 else:
-                    # Dynamically calculate tight boxes or write an empty txt for blank photos
                     boxes = detect_objects_and_get_yolo_boxes(src_img_path, class_id)
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.writelines(boxes)
