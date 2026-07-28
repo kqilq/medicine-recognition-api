@@ -4,7 +4,7 @@ import gc
 import requests
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageEnhance
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -59,7 +59,36 @@ async def predict_medicine(payload: PredictRequest):
         image = Image.open(io.BytesIO(response.content)).convert("RGB")
         img_w, img_h = image.size
 
-        # 2. Run Inference with low NMS overlap threshold to suppress duplicates
+        # Helper to extract detections from a result object
+        def extract_from_result(result, img_w, img_h):
+            detections_local = []
+            if result.boxes is not None and len(result.boxes) > 0:
+                for box in result.boxes:
+                    try:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        confidence = float(box.conf[0].item())
+                        class_id = int(box.cls[0].item())
+                        class_name = model.names[class_id]
+
+                        detections_local.append({
+                            "medicine": class_name,
+                            "confidence": round(confidence * 100, 1),
+                            # Absolute pixel coordinates: [ymin, xmin, ymax, xmax]
+                            "box": [round(y1, 1), round(x1, 1), round(y2, 1), round(x2, 1)],
+                            # Normalized coordinates (0.0 - 1.0) for frontend overlay
+                            "box_normalized": [
+                                round(y1 / img_h, 4),
+                                round(x1 / img_w, 4),
+                                round(y2 / img_h, 4),
+                                round(x2 / img_w, 4)
+                            ]
+                        })
+                    except Exception:
+                        # Skip any malformed box entries
+                        continue
+            return detections_local
+
+        # 2. Run primary inference
         results = model.predict(
             source=image,
             conf=0.25,  # 25% minimum confidence threshold
@@ -70,28 +99,37 @@ async def predict_medicine(payload: PredictRequest):
 
         detections = []
         result = results[0]
+        detections = extract_from_result(result, img_w, img_h)
 
-        # 3. Extract bounding boxes and category labels
-        if result.boxes is not None and len(result.boxes) > 0:
-            for box in result.boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                confidence = float(box.conf[0].item())
-                class_id = int(box.cls[0].item())
-                class_name = model.names[class_id]
+        # 3. If no detections, run a quick fallback: image enhancement + lower confidence + larger img size
+        if len(detections) == 0:
+            try:
+                print("No detections from primary pass — running fallback enhancement and second-pass inference")
+                # Basic enhancement chain: increase contrast and sharpness slightly
+                enhanced = ImageEnhance.Contrast(image).enhance(1.6)
+                enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.4)
+                enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
 
-                detections.append({
-                    "medicine": class_name,
-                    "confidence": round(confidence * 100, 1),
-                    # Absolute pixel coordinates: [ymin, xmin, ymax, xmax]
-                    "box": [round(y1, 1), round(x1, 1), round(y2, 1), round(x2, 1)],
-                    # Normalized coordinates (0.0 - 1.0) for frontend overlay
-                    "box_normalized": [
-                        round(y1 / img_h, 4),
-                        round(x1 / img_w, 4),
-                        round(y2 / img_h, 4),
-                        round(x2 / img_w, 4)
-                    ]
-                })
+                fallback_results = model.predict(
+                    source=enhanced,
+                    conf=0.15,  # lower threshold to catch low-confidence detections
+                    iou=0.3,    # slightly lower NMS IOU to preserve nearby boxes
+                    imgsz=1280, # allow higher-resolution processing
+                    verbose=False
+                )
+                fallback_result = fallback_results[0]
+                fallback_detections = extract_from_result(fallback_result, img_w, img_h)
+
+                # Use fallback detections if any were found
+                if len(fallback_detections) > 0:
+                    detections = fallback_detections
+                    print(f"Fallback found {len(fallback_detections)} detections")
+                else:
+                    print("Fallback did not find any detections")
+
+            except Exception as fe:
+                # If fallback fails, log and continue returning empty detections
+                print(f"Fallback inference error: {fe}")
 
         # 4. Sort detections by highest confidence score first
         detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
