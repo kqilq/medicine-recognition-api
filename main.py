@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-# Save memory on Render free/starter tiers
+# Limit PyTorch to 1 CPU thread to avoid Render memory limits
 torch.set_num_threads(1)
 
 app = FastAPI(title="YOLOv8 Medicine Object Detection API")
@@ -24,10 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load YOLOv8 Medium model (best.pt in root folder)
+# Load YOLOv8 model (best.pt in root folder, fallback to base weights)
 MODEL_PATH = "best.pt"
 if not os.path.exists(MODEL_PATH):
-    # Fallback to base weights if best.pt hasn't been trained/committed yet
     MODEL_PATH = "yolov8m.pt"
 
 print(f"Loading YOLO model from: {MODEL_PATH}")
@@ -36,6 +35,7 @@ model = YOLO(MODEL_PATH)
 
 class PredictRequest(BaseModel):
     file_url: str
+    count: int = 0  # Optional user-selected count (0 means return all detected)
 
 
 @app.get("/")
@@ -46,22 +46,23 @@ def read_root():
 @app.post("/predict")
 async def predict_medicine(payload: PredictRequest):
     file_url = payload.file_url
+    max_count = payload.count
 
     if not file_url or not isinstance(file_url, str):
         raise HTTPException(status_code=400, detail="file_url is required and must be a valid string.")
 
     try:
-        # 1. Download the image from Base44 URL
+        # 1. Download image from Base44 URL
         response = requests.get(file_url, timeout=15)
         response.raise_for_status()
 
         image = Image.open(io.BytesIO(response.content)).convert("RGB")
         img_w, img_h = image.size
 
-        # 2. Run Inference with low NMS overlap threshold to prevent duplicate boxes
+        # 2. Run Inference with low NMS overlap threshold to suppress duplicates
         results = model.predict(
             source=image,
-            conf=0.25,  # Min confidence threshold (25%)
+            conf=0.25,  # 25% minimum confidence threshold
             iou=0.45,   # NMS threshold: drops overlapping duplicate boxes
             imgsz=416,
             verbose=False
@@ -73,7 +74,6 @@ async def predict_medicine(payload: PredictRequest):
         # 3. Extract bounding boxes and category labels
         if result.boxes is not None and len(result.boxes) > 0:
             for box in result.boxes:
-                # Convert xyxy tensor coordinates to floats
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 confidence = float(box.conf[0].item())
                 class_id = int(box.cls[0].item())
@@ -84,7 +84,7 @@ async def predict_medicine(payload: PredictRequest):
                     "confidence": round(confidence * 100, 1),
                     # Absolute pixel coordinates: [ymin, xmin, ymax, xmax]
                     "box": [round(y1, 1), round(x1, 1), round(y2, 1), round(x2, 1)],
-                    # Normalized coordinates (0.0 - 1.0) for frontend flexibility
+                    # Normalized coordinates (0.0 - 1.0) for frontend overlay
                     "box_normalized": [
                         round(y1 / img_h, 4),
                         round(x1 / img_w, 4),
@@ -93,6 +93,13 @@ async def predict_medicine(payload: PredictRequest):
                     ]
                 })
 
+        # 4. Sort detections by highest confidence score first
+        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
+
+        # 5. Cap results to user-selected count if provided
+        if max_count > 0 and len(detections) > max_count:
+            detections = detections[:max_count]
+
         return {
             "success": True,
             "count": len(detections),
@@ -100,11 +107,11 @@ async def predict_medicine(payload: PredictRequest):
         }
 
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image from file_url: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Image download failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
     finally:
-        # Force garbage collection to prevent Render RAM spikes
+        # Force garbage collection to keep Render memory low
         gc.collect()
 
 
