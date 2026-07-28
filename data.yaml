@@ -3,10 +3,11 @@ train: images/train
 val: images/val
 
 names:
-  0: 南杏
-  1: 石決明
-  2: 穿破石
-  3: 苦瓜
-  4: 蘆根
-  5: 防風
-  6: 麩炒枳殼
+  0: backgrounds
+  1: 南杏
+  2: 石決明
+  3: 穿破石
+  4: 苦瓜
+  5: 蘆根
+  6: 防風
+  7: 麩炒枳殼
