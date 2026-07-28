@@ -8,9 +8,8 @@ from ultralytics import YOLO
 
 def detect_objects_and_get_yolo_boxes(img_path, class_id):
     """
-    Scans an image using OpenCV, isolates objects against the background,
-    and returns precise individual YOLO bounding boxes for each piece.
-    If the image is a blank background, it returns an empty list.
+    Scans an image using Adaptive Thresholding to capture dark, hollow,
+    or sliced medicinal roots accurately without missing pieces.
     """
     img = cv2.imread(img_path)
     if img is None:
@@ -18,29 +17,30 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
     
     h, w, _ = img.shape
     
-    # 1. Convert to LAB color space to separate lightness from color channels
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l_channel, _, _ = cv2.split(lab)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
-    # 2. Otsu's Thresholding to dynamically compute contrast cutoff
-    blurred = cv2.GaussianBlur(l_channel, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Adaptive Thresholding handles varied lighting and dark organic textures
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY_INV, 15, 3
+    )
     
-    # 3. Morphological closing to fill hollow inner herb structures
-    kernel = np.ones((5, 5), np.uint8)
+    # Morphological closing bridges hollow interior structures
+    kernel = np.ones((7, 7), np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     boxes = []
-    min_area = (w * h) * 0.008  # Drop tiny background artifacts (< 0.8% total area)
+    min_area = (w * h) * 0.003  # Detects smaller slices (> 0.3% total area)
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if area > min_area:
             x, y, bw, bh = cv2.boundingRect(cnt)
             
-            # Normalize coordinates for YOLO (0.0 to 1.0)
+            # Normalize for YOLO format
             x_center = (x + bw / 2.0) / w
             y_center = (y + bh / 2.0) / h
             norm_w = bw / w
@@ -66,7 +66,7 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
 
     print(f"Found {len(classes)} medicine categories: {classes}")
 
-    # Generate data.yaml
+    # Generate data.yaml mapping
     yaml_content = f"path: ./dataset\ntrain: images/train\nval: images/val\n\nnames:\n"
     for idx, cls_name in enumerate(classes):
         yaml_content += f"  {idx}: {cls_name}\n"
@@ -79,7 +79,7 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     lbl_train_dir = os.path.join(source_dir, "labels", "train")
     lbl_val_dir = os.path.join(source_dir, "labels", "val")
 
-    # Clean previous splits & caches
+    # Clean old generated structures and caches
     for generated_dir in [os.path.join(source_dir, "images"), os.path.join(source_dir, "labels")]:
         if os.path.exists(generated_dir):
             shutil.rmtree(generated_dir)
@@ -132,12 +132,12 @@ def main():
     auto_annotate_and_split("dataset")
 
     print("\n--- STEP 2: Training YOLO Model ---")
-    model = YOLO("yolov8m.pt")
+    model = YOLO("yolov8s.pt")  # Use small base model for better feature extraction
 
     results = model.train(
         data="data.yaml",
-        epochs=60,
-        imgsz=416,
+        epochs=80,
+        imgsz=640,       # Match inference image scale
         batch=4,
         workers=2,
         lr0=0.005,
@@ -150,7 +150,7 @@ def main():
     target_weight = os.path.join(model.trainer.save_dir, "weights", "best.pt")
     if os.path.exists(target_weight):
         shutil.copy(target_weight, "best.pt")
-        print("Successfully saved best.pt to root!")
+        print("Successfully generated and saved best.pt to root!")
 
 if __name__ == "__main__":
     main()
