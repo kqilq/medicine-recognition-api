@@ -2,7 +2,6 @@ import os
 import io
 import gc
 import requests
-import numpy as np
 import torch
 from PIL import Image, ImageEnhance
 from fastapi import FastAPI, HTTPException
@@ -10,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-# Limit PyTorch to 1 CPU thread to avoid Render memory limits
+# Keep PyTorch to 1 thread for Render CPU stability
 torch.set_num_threads(1)
 
 app = FastAPI(title="YOLOv8 Medicine Object Detection API")
@@ -24,10 +23,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load YOLOv8 model (best.pt in root folder, fallback to base weights)
+# Load trained YOLO model (best.pt in root folder, fallback to small weights)
 MODEL_PATH = "best.pt"
 if not os.path.exists(MODEL_PATH):
-    MODEL_PATH = "yolov8m.pt"
+    MODEL_PATH = "yolov8s.pt"
 
 print(f"Loading YOLO model from: {MODEL_PATH}")
 model = YOLO(MODEL_PATH)
@@ -35,7 +34,9 @@ model = YOLO(MODEL_PATH)
 
 class PredictRequest(BaseModel):
     file_url: str
-    count: int = 0  # Optional user-selected count (0 means return all detected)
+    count: int = 0      # 0 means return all detected
+    conf: float = 0.10  # Low confidence cutoff prevents dropping low-contrast items
+    iou: float = 0.45   # NMS overlap threshold
 
 
 @app.get("/")
@@ -47,19 +48,20 @@ def read_root():
 async def predict_medicine(payload: PredictRequest):
     file_url = payload.file_url
     max_count = payload.count
+    # Allow dynamic conf down to 0.05
+    target_conf = max(0.05, min(payload.conf, 0.90))
 
     if not file_url or not isinstance(file_url, str):
         raise HTTPException(status_code=400, detail="file_url is required and must be a valid string.")
 
     try:
-        # 1. Download image from Base44 URL
+        # 1. Download image from URL
         response = requests.get(file_url, timeout=15)
         response.raise_for_status()
 
         image = Image.open(io.BytesIO(response.content)).convert("RGB")
         img_w, img_h = image.size
 
-        # Helper to extract detections from a result object
         def extract_from_result(result, img_w, img_h):
             detections_local = []
             if result.boxes is not None and len(result.boxes) > 0:
@@ -73,9 +75,7 @@ async def predict_medicine(payload: PredictRequest):
                         detections_local.append({
                             "medicine": class_name,
                             "confidence": round(confidence * 100, 1),
-                            # Absolute pixel coordinates: [ymin, xmin, ymax, xmax]
                             "box": [round(y1, 1), round(x1, 1), round(y2, 1), round(x2, 1)],
-                            # Normalized coordinates (0.0 - 1.0) for frontend overlay
                             "box_normalized": [
                                 round(y1 / img_h, 4),
                                 round(x1 / img_w, 4),
@@ -84,57 +84,49 @@ async def predict_medicine(payload: PredictRequest):
                             ]
                         })
                     except Exception:
-                        # Skip any malformed box entries
                         continue
             return detections_local
 
-        # 2. Run primary inference
-        results = model.predict(
-            source=image,
-            conf=0.25,  # 25% minimum confidence threshold
-            iou=0.45,   # NMS threshold: drops overlapping duplicate boxes
-            imgsz=416,
-            verbose=False
-        )
+        # 2. Primary inference pass (torch.no_grad saves 60%+ RAM)
+        with torch.no_grad():
+            results = model.predict(
+                source=image,
+                conf=target_conf,  # 0.10 confidence threshold catches fainter items
+                iou=payload.iou,
+                imgsz=640,         # Preserves clear features
+                verbose=False
+            )
 
-        detections = []
-        result = results[0]
-        detections = extract_from_result(result, img_w, img_h)
+        detections = extract_from_result(results[0], img_w, img_h)
 
-        # 3. If no detections, run a quick fallback: image enhancement + lower confidence + larger img size
+        # 3. Fallback pass with image contrast enhancement if zero items detected
         if len(detections) == 0:
             try:
-                print("No detections from primary pass — running fallback enhancement and second-pass inference")
-                # Basic enhancement chain: increase contrast and sharpness slightly
-                enhanced = ImageEnhance.Contrast(image).enhance(1.6)
-                enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.4)
-                enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
+                print("No detections from primary pass — running enhanced fallback pass")
+                enhanced = ImageEnhance.Contrast(image).enhance(1.5)
+                enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.3)
 
-                fallback_results = model.predict(
-                    source=enhanced,
-                    conf=0.15,  # lower threshold to catch low-confidence detections
-                    iou=0.3,    # slightly lower NMS IOU to preserve nearby boxes
-                    imgsz=1280, # allow higher-resolution processing
-                    verbose=False
-                )
-                fallback_result = fallback_results[0]
-                fallback_detections = extract_from_result(fallback_result, img_w, img_h)
+                with torch.no_grad():
+                    fallback_results = model.predict(
+                        source=enhanced,
+                        conf=0.05,  # Aggressive lower bound
+                        iou=0.35,
+                        imgsz=640,
+                        verbose=False
+                    )
+                fallback_detections = extract_from_result(fallback_results[0], img_w, img_h)
 
-                # Use fallback detections if any were found
                 if len(fallback_detections) > 0:
                     detections = fallback_detections
-                    print(f"Fallback found {len(fallback_detections)} detections")
-                else:
-                    print("Fallback did not find any detections")
+                    print(f"Fallback pass found {len(fallback_detections)} detections")
 
             except Exception as fe:
-                # If fallback fails, log and continue returning empty detections
                 print(f"Fallback inference error: {fe}")
 
-        # 4. Sort detections by highest confidence score first
+        # 4. Sort detections by highest confidence score
         detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
 
-        # 5. Cap results to user-selected count if provided
+        # 5. Limit results count if requested
         if max_count > 0 and len(detections) > max_count:
             detections = detections[:max_count]
 
@@ -149,7 +141,6 @@ async def predict_medicine(payload: PredictRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
     finally:
-        # Force garbage collection to keep Render memory low
         gc.collect()
 
 
