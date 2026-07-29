@@ -32,10 +32,15 @@ jobs:
       - name: Run Fine-Tuning Script
         run: python train.py
 
-      - name: Clean up temporary cache files before commit
+      - name: Clean up temporary cache files
         run: |
           rm -f dataset/*.cache dataset/**/*.cache
-          git reset HEAD .
+
+      - name: Pull latest remote changes to prevent ref lock conflicts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull origin main --rebase --autostash || true
 
       - name: Commit and Push updated best.pt & data.yaml
         uses: stefanzweifel/git-auto-commit-action@v5
