@@ -4,6 +4,7 @@ import random
 import glob
 import cv2
 import numpy as np
+import yaml
 from ultralytics import YOLO
 
 def detect_objects_and_get_yolo_boxes(img_path, class_id):
@@ -16,7 +17,6 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
         return []
     
     h, w, _ = img.shape
-    
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
@@ -50,24 +50,45 @@ def detect_objects_and_get_yolo_boxes(img_path, class_id):
             
     return boxes
 
+
 def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     reserved_dirs = ["images", "labels", "train", "val", "runs", ".git", ".github"]
-    classes = [
+    
+    # 1. Load existing class index mapping from data.yaml if it exists
+    existing_classes = []
+    if os.path.exists("data.yaml"):
+        try:
+            with open("data.yaml", "r", encoding="utf-8") as f:
+                data_cfg = yaml.safe_load(f)
+                if data_cfg and "names" in data_cfg:
+                    if isinstance(data_cfg["names"], dict):
+                        existing_classes = [data_cfg["names"][k] for k in sorted(data_cfg["names"].keys())]
+                    elif isinstance(data_cfg["names"], list):
+                        existing_classes = data_cfg["names"]
+        except Exception as e:
+            print(f"Warning reading data.yaml: {e}")
+            existing_classes = []
+
+    # 2. Find medicine folders currently in dataset/
+    found_folders = [
         d for d in os.listdir(source_dir) 
         if os.path.isdir(os.path.join(source_dir, d)) 
         and d not in reserved_dirs 
         and not d.startswith(".")
     ]
-    classes.sort()
     
+    # Preserve original indices for existing classes; append new classes at the end
+    new_folders = sorted([d for d in found_folders if d not in existing_classes])
+    classes = existing_classes + new_folders
+
     if not classes:
-        print("No raw medicine folders found in dataset/.")
+        print("No medicine categories found in dataset/.")
         return
 
-    print(f"Found {len(classes)} medicine categories: {classes}")
+    print(f"Final class mapping ({len(classes)} total): {classes}")
 
-    # Generate data.yaml mapping
-    yaml_content = f"path: ./dataset\ntrain: images/train\nval: images/val\n\nnames:\n"
+    # 3. Write data.yaml with locked ID mapping
+    yaml_content = "path: ./dataset\ntrain: images/train\nval: images/val\n\nnames:\n"
     for idx, cls_name in enumerate(classes):
         yaml_content += f"  {idx}: {cls_name}\n"
     
@@ -79,11 +100,7 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     lbl_train_dir = os.path.join(source_dir, "labels", "train")
     lbl_val_dir = os.path.join(source_dir, "labels", "val")
 
-    # Clean old generated structures and caches
-    for generated_dir in [os.path.join(source_dir, "images"), os.path.join(source_dir, "labels")]:
-        if os.path.exists(generated_dir):
-            shutil.rmtree(generated_dir)
-
+    # Clean stale cache files only (Preserve processed images and labels)
     for cache_file in glob.glob(f"{source_dir}/**/*.cache", recursive=True):
         try:
             os.remove(cache_file)
@@ -93,10 +110,13 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
     for d in [img_train_dir, img_val_dir, lbl_train_dir, lbl_val_dir]:
         os.makedirs(d, exist_ok=True)
 
+    # 4. Copy raw image files & generate annotations for new items
     for class_id, cls_name in enumerate(classes):
         class_folder = os.path.join(source_dir, cls_name)
+        if not os.path.exists(class_folder):
+            continue
+
         images = [f for f in os.listdir(class_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
-        
         if not images:
             continue
 
@@ -112,14 +132,15 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
                 base_name = os.path.splitext(img_name)[0]
                 
                 dest_img_path = os.path.join(dest_img_dir, f"{cls_name}_{img_name}")
-                shutil.copy(src_img_path, dest_img_path)
+                if not os.path.exists(dest_img_path):
+                    shutil.copy(src_img_path, dest_img_path)
 
                 src_txt_path = os.path.join(class_folder, f"{base_name}.txt")
                 dest_txt_path = os.path.join(dest_lbl_dir, f"{cls_name}_{base_name}.txt")
 
                 if os.path.exists(src_txt_path):
                     shutil.copy(src_txt_path, dest_txt_path)
-                else:
+                elif not os.path.exists(dest_txt_path):
                     boxes = detect_objects_and_get_yolo_boxes(src_img_path, class_id)
                     with open(dest_txt_path, "w", encoding="utf-8") as txt_file:
                         txt_file.writelines(boxes)
@@ -127,30 +148,36 @@ def auto_annotate_and_split(source_dir="dataset", split_ratio=0.8):
         process_image_list(train_imgs, img_train_dir, lbl_train_dir)
         process_image_list(val_imgs, img_val_dir, lbl_val_dir)
 
+
 def main():
-    print("--- STEP 1: Auto-Detecting Objects & Generating Labels ---")
+    print("--- STEP 1: Auto-Detecting Objects & Updating Labels ---")
     auto_annotate_and_split("dataset")
 
-    print("\n--- STEP 2: Training YOLO Model ---")
-    model = YOLO("yolov8s.pt")  # Use small base model for better feature extraction
+    print("\n--- STEP 2: Incremental Training / Fine-Tuning YOLO ---")
+    
+    # Load previously trained best.pt if present; otherwise fall back to base weights
+    base_model = "best.pt" if os.path.exists("best.pt") else "yolov8s.pt"
+    print(f"Loading base model weights from: {base_model}")
+    
+    model = YOLO(base_model)
 
     results = model.train(
         data="data.yaml",
-        epochs=80,
-        imgsz=640,       # Match inference image scale
+        epochs=40,         # Fast convergence when fine-tuning
+        imgsz=640,
         batch=4,
         workers=2,
-        lr0=0.005,
+        lr0=0.001,         # Gentle learning rate prevents catastrophic unlearning
         project="runs",
         name="detect_run",
         exist_ok=True
     )
 
-    print("\n--- STEP 3: Saving Model ---")
+    print("\n--- STEP 3: Exporting Model Weights ---")
     target_weight = os.path.join(model.trainer.save_dir, "weights", "best.pt")
     if os.path.exists(target_weight):
         shutil.copy(target_weight, "best.pt")
-        print("Successfully generated and saved best.pt to root!")
+        print("Successfully updated best.pt in root directory!")
 
 if __name__ == "__main__":
     main()
