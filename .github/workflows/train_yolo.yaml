@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # Grants write permissions so git-auto-commit can push best.pt
+  contents: write
 
 jobs:
   train:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }} # Correct variable for push events
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -27,20 +27,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ultralytics torch torchvision opencv-python
+          pip install ultralytics torch torchvision opencv-python pyyaml
 
-      - name: Run Training Script
+      - name: Run Fine-Tuning Script
         run: python train.py
 
       - name: Clean up temporary cache files before commit
         run: |
-          # Remove cache files so they never trigger git conflicts
           rm -f dataset/*.cache dataset/**/*.cache
           git reset HEAD .
 
-      - name: Commit and Push updated best.pt
+      - name: Commit and Push updated best.pt & data.yaml
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Auto-update trained model weights [skip ci]"
-          file_pattern: "best.pt data.yaml" # ONLY commit best.pt and data.yaml
+          commit_message: "Auto-update model weights and data.yaml [skip ci]"
+          file_pattern: "best.pt data.yaml"
           push_options: "--force"
