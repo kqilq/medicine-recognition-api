@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-# Keep PyTorch to 1 thread for Render CPU stability
+# Stabilize CPU execution for cloud hosts (e.g. Render / Railway)
 torch.set_num_threads(1)
 
 app = FastAPI(title="YOLOv8 Medicine Object Detection API")
@@ -23,11 +23,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load trained YOLO model (best.pt in root folder, fallback to small weights)
-MODEL_PATH = "best.pt"
-if not os.path.exists(MODEL_PATH):
-    MODEL_PATH = "yolov8s.pt"
-
+# Load trained YOLO model (best.pt in root folder, fallback to base weights)
+MODEL_PATH = "best.pt" if os.path.exists("best.pt") else "yolov8s.pt"
 print(f"Loading YOLO model from: {MODEL_PATH}")
 model = YOLO(MODEL_PATH)
 
@@ -35,27 +32,30 @@ model = YOLO(MODEL_PATH)
 class PredictRequest(BaseModel):
     file_url: str
     count: int = 0      # 0 means return all detected
-    conf: float = 0.10  # Low confidence cutoff prevents dropping low-contrast items
-    iou: float = 0.45   # NMS overlap threshold
+    conf: float = 0.10  # Low cutoff prevents missing faint/pale items
+    iou: float = 0.45   # Non-maximum suppression threshold
 
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "Medicine Detection API is active."}
+    return {
+        "status": "ok", 
+        "message": "Medicine Detection API is active.",
+        "supported_classes": list(model.names.values()) if hasattr(model, 'names') else []
+    }
 
 
 @app.post("/predict")
 async def predict_medicine(payload: PredictRequest):
     file_url = payload.file_url
     max_count = payload.count
-    # Allow dynamic conf down to 0.05
     target_conf = max(0.05, min(payload.conf, 0.90))
 
     if not file_url or not isinstance(file_url, str):
         raise HTTPException(status_code=400, detail="file_url is required and must be a valid string.")
 
     try:
-        # 1. Download image from URL
+        # 1. Download target image from payload URL
         response = requests.get(file_url, timeout=15)
         response.raise_for_status()
 
@@ -70,7 +70,9 @@ async def predict_medicine(payload: PredictRequest):
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
                         confidence = float(box.conf[0].item())
                         class_id = int(box.cls[0].item())
-                        class_name = model.names[class_id]
+                        
+                        # Dynamically extract class name from model state
+                        class_name = model.names.get(class_id, f"Unknown_{class_id}")
 
                         detections_local.append({
                             "medicine": class_name,
@@ -87,29 +89,29 @@ async def predict_medicine(payload: PredictRequest):
                         continue
             return detections_local
 
-        # 2. Primary inference pass (torch.no_grad saves 60%+ RAM)
+        # 2. Primary inference pass
         with torch.no_grad():
             results = model.predict(
                 source=image,
-                conf=target_conf,  # 0.10 confidence threshold catches fainter items
+                conf=target_conf,
                 iou=payload.iou,
-                imgsz=640,         # Preserves clear features
+                imgsz=640,
                 verbose=False
             )
 
         detections = extract_from_result(results[0], img_w, img_h)
 
-        # 3. Fallback pass with image contrast enhancement if zero items detected
+        # 3. Enhanced Fallback Pass (if initial pass yields 0 items)
         if len(detections) == 0:
             try:
-                print("No detections from primary pass — running enhanced fallback pass")
+                print("No detections from primary pass — running contrast fallback pass")
                 enhanced = ImageEnhance.Contrast(image).enhance(1.5)
                 enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.3)
 
                 with torch.no_grad():
                     fallback_results = model.predict(
                         source=enhanced,
-                        conf=0.05,  # Aggressive lower bound
+                        conf=0.05,
                         iou=0.35,
                         imgsz=640,
                         verbose=False
@@ -118,15 +120,14 @@ async def predict_medicine(payload: PredictRequest):
 
                 if len(fallback_detections) > 0:
                     detections = fallback_detections
-                    print(f"Fallback pass found {len(fallback_detections)} detections")
 
             except Exception as fe:
                 print(f"Fallback inference error: {fe}")
 
-        # 4. Sort detections by highest confidence score
+        # 4. Sort results by highest confidence
         detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
 
-        # 5. Limit results count if requested
+        # 5. Crop count limit if requested
         if max_count > 0 and len(detections) > max_count:
             detections = detections[:max_count]
 
