@@ -136,7 +136,7 @@ def main():
 
     results = model.train(
         data="data.yaml",
-        epochs=80,
+        epochs=10,
         imgsz=640,       # Match inference image scale
         batch=4,
         workers=2,
